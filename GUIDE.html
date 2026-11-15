@@ -21,7 +21,7 @@ pre code{padding:0;background:none}
 <li><a href="#the-project-in-one-paragraph">The project in one paragraph</a></li>
 <li><a href="#basic-ideas">Basic ideas</a></li>
 <li><a href="#file-by-file">File by file</a></li>
-<li><a href="#the-shiny-app">The Shiny app</a></li>
+<li><a href="#the-dashboard">The dashboard</a></li>
 <li><a href="#how-to-read-the-results">How to read the results</a></li>
 <li><a href="#questions-you-may-be-asked">Questions you may be asked</a></li>
 </ol>
@@ -199,19 +199,24 @@ crr(ftime = analysis_data$time, fstatus = analysis_data$event_status,
 <p><strong>Expected result:</strong> Aalen-Johansen has bias close to 0 in every scenario. 1 - Kaplan-Meier is too high, and the gap grows as the death rate increases. With very few deaths, both methods agree.</p>
 <p><strong><code>set.seed()</code></strong> fixes the random numbers so that everyone who runs the script gets the same results.</p>
 <hr />
-<h2 id="the-shiny-app">The Shiny app</h2>
-<p><code>app.R</code> is an interactive version of the analysis. You do not need to run the scripts first.</p>
-<p><strong>How Shiny works:</strong>
-- <code>ui</code> describes what the page looks like: tabs, menus, sliders and empty areas for plots and tables.
-- <code>server</code> contains the R code that fills each area. Each output is written as <code>output$name &lt;- renderPlot({ ... })</code> and reads the user's choices with <code>input$name</code>.
-- When the user changes a menu, Shiny automatically re-runs only the outputs that use it.
-- <code>reactive()</code> stores a result that several outputs share, so it is calculated once.
+<h2 id="the-dashboard">The dashboard</h2>
+<p><code>dashboard.Rmd</code> is an interactive <strong>flexdashboard</strong>: an R Markdown file that becomes a dashboard web page with tabs, KPI boxes, side panels and cards. Open it in RStudio and click <strong>Run Document</strong>. You do not need to run the scripts first.</p>
+<p><strong>How a flexdashboard file is organised:</strong>
+- The header at the top (YAML) sets the title, the layout and the colour theme, and <code>runtime: shiny</code> makes it interactive.
+- A line of <code>=====</code> under a name creates a <strong>page</strong> (a tab in the top bar).
+- A line of <code>-----</code> under <code>Row</code> or <code>Column</code> creates a row or column on that page; <code>{.sidebar}</code> turns a column into a side panel for inputs.
+- <code>### Title</code> creates a <strong>card</strong>; the R chunk under it fills the card with a plot, a table or a value box.
+- <code>valueBox()</code> shows a headline number (patients, relapses, deaths, censored).</p>
+<p><strong>How the interactive part works (Shiny):</strong>
+- Inputs such as <code>selectInput()</code> and <code>sliderInput()</code> are placed in the sidebar; their value is read with <code>input$name</code>.
+- <code>renderPlot({ ... })</code>, <code>renderDT({ ... })</code> and <code>renderValueBox({ ... })</code> redraw automatically when an input they use changes.
+- <code>reactive()</code> stores a result that several cards share, so it is calculated once.
 - <code>eventReactive()</code> waits for a button press. The simulation uses this so it does not restart every time a slider moves.</p>
-<p><strong>The six tabs:</strong></p>
+<p><strong>The six pages:</strong></p>
 <table>
 <thead>
 <tr>
-<th>Tab</th>
+<th>Page</th>
 <th>What it shows</th>
 <th>Matches script</th>
 </tr>
@@ -219,22 +224,22 @@ crr(ftime = analysis_data$time, fstatus = analysis_data$event_status,
 <tbody>
 <tr>
 <td>Overview</td>
-<td>The question and a table of first events by group</td>
+<td>Four KPI boxes, first events by group, what the dashboard is about</td>
 <td>01</td>
 </tr>
 <tr>
 <td>Data</td>
-<td>Boxplots or bar charts of any variable, compared by a chosen group</td>
+<td>Boxplots or bar charts of any variable by a chosen group, with a summary table</td>
 <td>02</td>
 </tr>
 <tr>
 <td>Survival</td>
-<td>Kaplan-Meier curves and log-rank test, for a chosen grouping</td>
+<td>Kaplan-Meier curves, log-rank test, survival at one year</td>
 <td>03</td>
 </tr>
 <tr>
 <td>Competing risks</td>
-<td>Cumulative incidence and Gray's test; correct vs naive relapse estimate</td>
+<td>Cumulative incidence and Gray's test; correct vs naive relapse risk in two value boxes</td>
 <td>04</td>
 </tr>
 <tr>
@@ -249,7 +254,7 @@ crr(ftime = analysis_data$time, fstatus = analysis_data$event_status,
 </tr>
 </tbody>
 </table>
-<p>A good live demonstration: on the Simulation tab, set the death rate to 0 and run - both methods agree. Then raise it to 0.30 and run again - the naive method moves well above the red line.</p>
+<p>A good live demonstration: on the Simulation page, set the death rate to 0 and run - both methods agree. Then raise it to 0.30 and run again - the naive method moves well above the true value line.</p>
 <hr />
 <h2 id="how-to-read-the-results">How to read the results</h2>
 <table>

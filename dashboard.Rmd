@@ -1,0 +1,647 @@
+---
+title: "BMT Survival Explorer"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme:
+      version: 4
+      bg: "#FFFFFF"
+      fg: "#1F2A37"
+      primary: "#1F3A5F"
+      navbar-bg: "#1F3A5F"
+runtime: shiny
+---
+
+```{css}
+body {
+  background-color: #EEF1F5;
+  font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #1F2A37;
+}
+.navbar { box-shadow: 0 2px 6px rgba(16, 24, 40, 0.18); }
+.navbar-brand { font-weight: 700; letter-spacing: 0.3px; }
+.navbar .nav-item.active > .nav-link,
+.navbar .nav-link.active,
+.navbar .active > a { border-bottom: 3px solid #2A9D8F; }
+
+.chart-wrapper {
+  background-color: #FFFFFF;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.chart-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #1F3A5F;
+  border-bottom: 1px solid #E5E9F0;
+}
+
+.value-box { border-radius: 10px; box-shadow: 0 1px 3px rgba(16, 24, 40, 0.15); }
+.value-box .value { font-weight: 700; }
+.value-box .caption { font-size: 14px; opacity: 0.92; }
+
+.section.sidebar {
+  background-color: #FFFFFF;
+  border-right: 1px solid #E5E9F0;
+  padding: 18px 16px;
+}
+.section.sidebar strong { color: #1F3A5F; font-size: 15px; }
+.btn-primary { width: 100%; font-weight: 600; border-radius: 8px; }
+
+.shiny-table { width: 100%; margin-bottom: 0; }
+.shiny-table thead th {
+  background-color: #F4F6F9;
+  color: #1F3A5F;
+  font-weight: 600;
+  border-top: none;
+  border-bottom: 2px solid #D9DEE7;
+}
+.shiny-table td { font-size: 13.5px; color: #1F2A37; }
+```
+
+```{r setup, include = FALSE}
+source("01_preprocessing.R")   # same data prep as the scripts, so results match
+library(flexdashboard)
+library(shiny)
+
+# fixed colours so an event looks the same on every page
+palette_main  <- c("#2A9D8F", "#E76F51", "#1F3A5F", "#E9C46A")
+event_colours <- c("Censored" = "#B8C4CE", "Relapse" = "#E76F51",
+                   "Death before relapse" = "#1F3A5F")
+method_colours <- c("Aalen-Johansen" = "#2A9D8F", "1 - Kaplan-Meier" = "#E76F51")
+
+theme_dashboard <- theme_minimal(base_size = 14) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(colour = "#E5E9F0"),
+        legend.position  = "bottom",
+        legend.title     = element_blank(),
+        axis.title       = element_text(colour = "#4A5568"),
+        axis.text        = element_text(colour = "#4A5568"),
+        strip.text       = element_text(face = "bold", colour = "#1F3A5F", size = 13))
+
+# menu label = column name in the data
+explore_choices <- c(
+  "Patient age (years)" = "patient_age",
+  "Donor age (years)"   = "donor_age",
+  "Waiting time (days)" = "waiting_days",
+  "Patient sex"         = "patient_sex",
+  "Patient CMV"         = "patient_cmv",
+  "Donor CMV"           = "donor_cmv",
+  "MTX given"           = "mtx",
+  "First event"         = "event_label"
+)
+
+group_choices <- c(
+  "Disease group" = "disease_group",
+  "Patient sex"   = "patient_sex",
+  "Patient CMV"   = "patient_cmv",
+  "Donor CMV"     = "donor_cmv",
+  "MTX given"     = "mtx"
+)
+
+# models don't depend on inputs, so fit them once at start-up
+cox_relapse <- coxph(Surv(time, relapse_event) ~ disease_group + age10 + patient_sex,data = analysis_data)
+cox_summary <- summary(cox_relapse)
+
+# crr() only takes a numeric matrix, so factors become 0/1 columns
+fg_covariates <- model.matrix(~ disease_group + age10 + patient_sex,
+                              data = analysis_data)[, -1]
+fg_relapse <- crr(ftime = analysis_data$time, fstatus = analysis_data$event_status,
+                  cov1 = fg_covariates, failcode = 1, cencode = 0)
+fg_summary <- summary(fg_relapse)
+
+model_results <- data.frame(
+  Variable  = term_labels[colnames(fg_covariates)],
+  HR        = cox_summary$conf.int[, "exp(coef)"],
+  HR_lower  = cox_summary$conf.int[, "lower .95"],
+  HR_upper  = cox_summary$conf.int[, "upper .95"],
+  HR_p      = cox_summary$coefficients[, "Pr(>|z|)"],
+  SHR       = fg_summary$conf.int[, 1],
+  SHR_lower = fg_summary$conf.int[, 3],
+  SHR_upper = fg_summary$conf.int[, 4],
+  SHR_p     = fg_summary$coef[, 5],
+  row.names = NULL
+)
+
+ph_test <- cox.zph(cox_relapse)$table
+
+cif_all  <- cuminc(analysis_data$time, analysis_data$event_status, cencode = 0)
+naive_km <- survfit(Surv(time, relapse_event) ~ 1, data = analysis_data)   # kept only to show the bias
+```
+
+
+Overview
+=====================================
+
+Row {data-height=160}
+-----------------------------------------------------------------------
+
+### Patients
+
+```{r}
+valueBox(nrow(analysis_data), caption = "Patients", icon = "fa-users", color = "#1F3A5F")
+```
+
+### Relapse first
+
+```{r}
+valueBox(sum(analysis_data$event_status == 1), caption = "Relapsed (first event)", color = "#E76F51")
+```
+
+### Death before relapse
+
+```{r}
+valueBox(sum(analysis_data$event_status == 2), caption = "Died before relapse",
+         icon = "fa-heartbeat", color = "#264653")
+```
+
+### Censored
+
+```{r}
+valueBox(sum(analysis_data$event_status == 0), caption = "Censored (neither event)", color = "#2A9D8F")
+```
+
+Row
+-----------------------------------------------------------------------
+
+### First observed event by disease group
+
+```{r}
+ggplot(analysis_data, aes(x = disease_group, fill = event_label)) +
+  geom_bar(position = "fill", width = 0.6) +
+  scale_fill_manual(values = event_colours) +
+  scale_y_continuous(labels = function(x) paste0(x * 100, "%")) +
+  labs(x = NULL, y = "Share of patients") +
+  theme_dashboard
+```
+
+### About this dashboard
+
+**Question.** After a bone marrow transplant, which patients are more likely to relapse, and how should relapse risk be measured when some patients die first?
+
+**Data.** 137 patients with acute leukaemia (dataset `bmt`, R package KMsurv). For each patient the first of three outcomes is recorded: relapse, death before relapse (a competing event), or censoring.
+
+**Pages.**
+
+- **Data** - explore any variable by group
+- **Survival** - Kaplan-Meier curves and the log-rank test
+- **Competing risks** - cumulative incidence (Aalen-Johansen), Gray's test, and why 1 - Kaplan-Meier overestimates relapse
+- **Models** - cause-specific Cox and Fine-Gray regression
+- **Simulation** - test both estimators against a known true value
+
+
+Data {data-orientation=columns}
+=====================================
+
+Column {.sidebar data-width=280}
+-----------------------------------------------------------------------
+
+**Explore the data**
+
+```{r}
+selectInput("explore_var", "Variable", choices = explore_choices)
+selectInput("explore_group", "Compare by", choices = group_choices)
+```
+
+Continuous variables are shown as boxplots, categories as bar charts.
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Distribution
+
+```{r}
+renderPlot({
+  var   <- input$explore_var
+  group <- input$explore_group
+  var_label   <- names(explore_choices)[explore_choices == var]
+  group_label <- names(group_choices)[group_choices == group]
+
+  if (is.numeric(analysis_data[[var]])) {
+    ggplot(analysis_data, aes(x = .data[[group]], y = .data[[var]], fill = .data[[group]])) +
+      geom_boxplot(width = 0.5, alpha = 0.85, outlier.colour = "#6C7A89") +
+      scale_fill_manual(values = palette_main) +
+      labs(x = group_label, y = var_label) +
+      theme_dashboard +
+      theme(legend.position = "none")
+  } else {
+    ggplot(analysis_data, aes(x = .data[[group]], fill = .data[[var]])) +
+      geom_bar(position = "dodge", width = 0.7) +
+      scale_fill_manual(values = palette_main) +
+      labs(x = group_label, y = "Number of patients") +
+      theme_dashboard
+  }
+})
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Summary
+
+```{r}
+renderTable({
+  var   <- input$explore_var
+  group <- input$explore_group
+
+  if (is.numeric(analysis_data[[var]])) {
+    summary_table <- analysis_data %>%
+      group_by(Group = .data[[group]]) %>%
+      summarise(Patients = n(),
+                Median   = median(.data[[var]]),
+                Mean     = round(mean(.data[[var]]), 1),
+                Min      = min(.data[[var]]),
+                Max      = max(.data[[var]]))
+  } else {
+    summary_table <- as.data.frame(table(Group = analysis_data[[group]],
+                                         Level = analysis_data[[var]]))
+    names(summary_table)[3] <- "Patients"
+  }
+  summary_table
+}, striped = TRUE, hover = TRUE, width = "100%", digits = 1)
+```
+
+
+Survival {data-orientation=columns}
+=====================================
+
+Column {.sidebar data-width=280}
+-----------------------------------------------------------------------
+
+**Overall survival**
+
+```{r}
+selectInput("km_group", "Compare by", choices = group_choices)
+checkboxInput("km_ci", "Show 95% confidence intervals", value = FALSE)
+```
+
+Kaplan-Meier estimate of the probability of being alive. The log-rank test checks whether the curves differ between groups.
+
+```{r}
+# shared by the plot and the one-year table, so it is fitted once
+km_fit <- reactive({
+  survfit(as.formula(paste("Surv(os_days, died) ~", input$km_group)),
+          data = analysis_data)
+})
+
+logrank <- reactive({
+  survdiff(as.formula(paste("Surv(os_days, died) ~", input$km_group)),
+           data = analysis_data)
+})
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Kaplan-Meier curves
+
+```{r}
+renderPlot({
+  fit <- km_fit()
+
+  # ggplot needs a data frame, not a survfit object
+  curves <- data.frame(
+    time     = fit$time,
+    survival = fit$surv,
+    lower    = fit$lower,
+    upper    = fit$upper,
+    censored = fit$n.censor > 0,
+    group    = sub(".*=", "", rep(names(fit$strata), fit$strata))
+  )
+  # every curve starts at 100% on day 0
+  start  <- data.frame(time = 0, survival = 1, lower = 1, upper = 1,
+                       censored = FALSE, group = unique(curves$group))
+  curves <- rbind(start, curves)
+  curves$group <- factor(curves$group, levels = levels(analysis_data[[input$km_group]]))   # keep legend order
+
+  plot <- ggplot(curves, aes(x = time, y = survival, colour = group)) +
+    geom_step(linewidth = 1.1) +
+    geom_point(data = subset(curves, censored), shape = 3, size = 2) +
+    scale_colour_manual(values = palette_main) +
+    scale_y_continuous(limits = c(0, 1), labels = function(x) paste0(x * 100, "%")) +
+    labs(x = "Days since transplant", y = "Survival probability") +
+    theme_dashboard
+
+  if (input$km_ci) {
+    plot <- plot +
+      geom_step(aes(y = lower), linetype = "dashed", alpha = 0.5, na.rm = TRUE) +
+      geom_step(aes(y = upper), linetype = "dashed", alpha = 0.5, na.rm = TRUE)
+  }
+  plot
+})
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Log-rank test
+
+```{r}
+renderUI({
+  test    <- logrank()
+  df      <- length(test$n) - 1
+  p_value <- pchisq(test$chisq, df = df, lower.tail = FALSE)
+  verdict <- if (p_value < 0.05) "Survival differs between groups." else
+    "No clear evidence that survival differs between groups."
+  HTML(sprintf("<p style='font-size:16px'>Chi-square = <b>%.2f</b> on %d df<br>
+                p-value = <b>%.4f</b></p><p>%s</p>",
+               test$chisq, df, p_value, verdict))
+})
+```
+
+### Survival at one year
+
+```{r}
+renderTable({
+  one_year <- summary(km_fit(), times = 365, extend = TRUE)
+  data.frame(
+    Group          = sub(".*=", "", as.character(one_year$strata)),
+    `At risk`      = one_year$n.risk,
+    Survival       = one_year$surv,
+    `95% CI lower` = one_year$lower,
+    `95% CI upper` = one_year$upper,
+    check.names = FALSE
+  )
+}, striped = TRUE, hover = TRUE, width = "100%", digits = 3)
+```
+
+
+Competing risks {data-orientation=columns}
+=====================================
+
+Column {.sidebar data-width=280}
+-----------------------------------------------------------------------
+
+**Relapse vs death**
+
+```{r}
+selectInput("cif_group", "Compare by", choices = group_choices)
+sliderInput("cif_day", "Estimate at day", min = 0, max = 2000, value = 365, step = 50)
+```
+
+Death before relapse is a competing event: after death, relapse cannot occur. The cumulative incidence (Aalen-Johansen) accounts for this; 1 - Kaplan-Meier treats deaths as censored and overestimates relapse.
+
+```{r}
+cif_fit <- reactive({
+  cuminc(ftime   = analysis_data$time,
+         fstatus = analysis_data$event_status,
+         group   = analysis_data[[input$cif_group]],
+         cencode = 0)
+})
+```
+
+Column {data-width=600}
+-----------------------------------------------------------------------
+
+### Cumulative incidence by group
+
+```{r}
+renderPlot({
+  fit <- cif_fit()
+
+  # curve names look like "ALL 1": group, then cause (1 relapse, 2 death)
+  cif_curves <- data.frame()
+  for (curve_name in names(fit)) {
+    if (curve_name == "Tests") next
+    cif_curves <- rbind(cif_curves, data.frame(
+      group    = sub(" [12]$", "", curve_name),
+      cause    = ifelse(grepl("1$", curve_name), "Relapse", "Death before relapse"),
+      time     = fit[[curve_name]]$time,
+      estimate = fit[[curve_name]]$est
+    ))
+  }
+  cif_curves$group <- factor(cif_curves$group, levels = levels(analysis_data[[input$cif_group]]))
+  cif_curves$cause <- factor(cif_curves$cause, levels = c("Relapse", "Death before relapse"))
+
+  ggplot(cif_curves, aes(x = time, y = estimate, colour = group)) +
+    geom_step(linewidth = 1.1) +
+    geom_vline(xintercept = input$cif_day, linetype = "dotted", colour = "#6C7A89") +
+    facet_wrap(~ cause) +
+    scale_colour_manual(values = palette_main) +
+    scale_y_continuous(limits = c(0, 1), labels = function(x) paste0(x * 100, "%")) +
+    labs(x = "Days since transplant", y = "Cumulative incidence") +
+    theme_dashboard
+})
+```
+
+### Gray's test {data-height=220}
+
+```{r}
+renderTable({
+  tests <- cif_fit()$Tests
+  data.frame(
+    Event       = ifelse(rownames(tests) == "1", "Relapse", "Death before relapse"),
+    Statistic   = round(tests[, "stat"], 2),
+    df          = as.integer(tests[, "df"]),
+    `p-value`   = format.pval(tests[, "pv"], digits = 3),
+    check.names = FALSE
+  )
+}, striped = TRUE, hover = TRUE, width = "100%")
+```
+
+Column {data-width=400}
+-----------------------------------------------------------------------
+
+### Relapse risk, Aalen-Johansen {data-height=150}
+
+```{r}
+renderValueBox({
+  correct <- timepoints(cif_all, times = input$cif_day)$est[1, 1]
+  valueBox(sprintf("%.1f%%", 100 * correct),
+           caption = paste("Relapse by day", input$cif_day, "(correct)"), color = "#2A9D8F")
+})
+```
+
+### Relapse risk, 1 - Kaplan-Meier {data-height=150}
+
+```{r}
+renderValueBox({
+  naive <- 1 - summary(naive_km, times = input$cif_day, extend = TRUE)$surv
+  valueBox(sprintf("%.1f%%", 100 * naive),
+           caption = paste("Relapse by day", input$cif_day, "(naive, too high)"), color = "#E76F51")
+})
+```
+
+### Correct vs naive estimate (all patients)
+
+```{r}
+renderPlot({
+  comparison <- rbind(
+    data.frame(method = "Aalen-Johansen",
+               time = cif_all[["1 1"]]$time, estimate = cif_all[["1 1"]]$est),
+    data.frame(method = "1 - Kaplan-Meier",
+               time = c(0, naive_km$time), estimate = c(0, 1 - naive_km$surv))
+  )
+  ggplot(comparison, aes(x = time, y = estimate, colour = method)) +
+    geom_step(linewidth = 1.1) +
+    geom_vline(xintercept = input$cif_day, linetype = "dotted", colour = "#6C7A89") +
+    scale_colour_manual(values = method_colours) +
+    scale_y_continuous(labels = function(x) paste0(x * 100, "%")) +
+    labs(x = "Days since transplant", y = "Probability of relapse") +
+    theme_dashboard
+})
+```
+
+
+Models
+=====================================
+
+Row {data-height=550}
+-----------------------------------------------------------------------
+
+### Effect of patient characteristics on relapse
+
+```{r}
+forest <- rbind(
+  data.frame(model = "Cause-specific Cox (HR)", variable = model_results$Variable,
+             ratio = model_results$HR, lower = model_results$HR_lower,
+             upper = model_results$HR_upper),
+  data.frame(model = "Fine-Gray (SHR)", variable = model_results$Variable,
+             ratio = model_results$SHR, lower = model_results$SHR_lower,
+             upper = model_results$SHR_upper)
+)
+
+ggplot(forest, aes(x = variable, y = ratio, colour = model)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "#6C7A89") +
+  geom_pointrange(aes(ymin = lower, ymax = upper),
+                  position = position_dodge(width = 0.5), size = 0.6) +
+  scale_colour_manual(values = c("#1F3A5F", "#E76F51")) +
+  scale_y_log10() +
+  coord_flip() +
+  labs(x = NULL, y = "Ratio with 95% confidence interval (log scale)") +
+  theme_dashboard
+```
+
+### How to read the models
+
+**Cause-specific Cox (HR):** effect on the relapse *rate* among patients still alive and relapse-free. Deaths are treated as censored.
+
+**Fine-Gray (SHR):** effect on the overall *probability* of relapse. Patients who died stay in the risk set as never relapsed.
+
+A value above 1 means higher risk, below 1 lower risk. If the confidence interval crosses the dashed line at 1, the effect is not statistically significant.
+
+Reference groups: ALL (disease group) and female (sex). Age is per 10 years.
+
+Row
+-----------------------------------------------------------------------
+
+### Estimates
+
+```{r}
+model_table <- model_results
+names(model_table) <- c("Variable", "HR", "HR lower", "HR upper", "HR p-value",
+                        "SHR", "SHR lower", "SHR upper", "SHR p-value")
+renderTable(model_table, striped = TRUE, hover = TRUE, width = "100%", digits = 3)
+```
+
+### Proportional hazards check (Cox model)
+
+```{r}
+ph_table <- data.frame(Term         = rownames(ph_test),
+                       `Chi-square` = ph_test[, "chisq"],
+                       df           = as.integer(ph_test[, "df"]),
+                       `p-value`    = ph_test[, "p"],
+                       Verdict      = ifelse(ph_test[, "p"] < 0.05, "Check", "OK"),
+                       check.names  = FALSE)
+renderTable(ph_table, striped = TRUE, hover = TRUE, width = "100%", digits = 3)
+```
+
+
+Simulation {data-orientation=columns}
+=====================================
+
+Column {.sidebar data-width=280}
+-----------------------------------------------------------------------
+
+**Simulation settings**
+
+```{r}
+sliderInput("sim_death", "Death rate (competing event)", min = 0, max = 0.30,
+            value = 0.08, step = 0.02)
+sliderInput("sim_censor", "Censoring rate", min = 0.02, max = 0.30,
+            value = 0.05, step = 0.02)
+sliderInput("sim_reps", "Number of simulated datasets", min = 50, max = 300,
+            value = 100, step = 50)
+actionButton("sim_run", "Run simulation", class = "btn-primary")
+```
+
+Each dataset has 137 patients and a relapse rate of 0.08. Both methods estimate the probability of relapse by time 5 and are compared with the true value. Try a death rate of 0, then 0.30.
+
+```{r}
+# runs on button click only, because the loop is slow
+sim_results <- eventReactive(input$sim_run, {
+  n_patients   <- 137
+  relapse_rate <- 0.08
+  tau          <- 5
+  true_cif <- relapse_rate / (relapse_rate + input$sim_death) *
+    (1 - exp(-(relapse_rate + input$sim_death) * tau))
+
+  aj_estimates    <- numeric(input$sim_reps)
+  naive_estimates <- numeric(input$sim_reps)
+
+  withProgress(message = "Simulating", value = 0, {
+    for (r in seq_len(input$sim_reps)) {
+      time_relapse  <- rexp(n_patients, relapse_rate)
+      time_death    <- rexp(n_patients, input$sim_death)
+      time_censor   <- rexp(n_patients, input$sim_censor)
+      observed_time <- pmin(time_relapse, time_death, time_censor)   # first event wins
+      status <- ifelse(observed_time == time_relapse, 1,
+                       ifelse(observed_time == time_death, 2, 0))
+
+      aj_estimates[r] <- timepoints(cuminc(observed_time, status, cencode = 0), tau)$est[1, 1]
+      km <- survfit(Surv(observed_time, status == 1) ~ 1)   # deaths treated as censored
+      naive_estimates[r] <- 1 - summary(km, times = tau, extend = TRUE)$surv
+
+      incProgress(1 / input$sim_reps)
+    }
+  })
+
+  data.frame(method   = rep(c("Aalen-Johansen", "1 - Kaplan-Meier"), each = input$sim_reps),
+             estimate = c(aj_estimates, naive_estimates),
+             true_cif = true_cif)
+}, ignoreNULL = FALSE)   # also run once at start so the page isn't empty
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Estimated probability of relapse at time 5
+
+```{r}
+renderPlot({
+  sims <- sim_results()
+  ggplot(sims, aes(x = method, y = estimate, fill = method)) +
+    geom_boxplot(width = 0.5, alpha = 0.85, outlier.size = 0.8) +
+    geom_hline(yintercept = sims$true_cif[1], colour = "#1F3A5F", linewidth = 1) +
+    annotate("text", x = 0.6, y = sims$true_cif[1], label = "true value",
+             vjust = -0.6, hjust = 0, colour = "#1F3A5F") +
+    scale_fill_manual(values = method_colours) +
+    labs(x = NULL, y = "Estimate") +
+    theme_dashboard +
+    theme(legend.position = "none")
+})
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Performance
+
+```{r}
+renderTable({
+  sim_results() %>%
+    group_by(Method = method) %>%
+    summarise(`True value`    = mean(true_cif),
+              `Mean estimate` = mean(estimate, na.rm = TRUE),
+              Bias            = mean(estimate - true_cif, na.rm = TRUE),
+              RMSE            = sqrt(mean((estimate - true_cif)^2, na.rm = TRUE)))
+}, striped = TRUE, hover = TRUE, width = "100%", digits = 4)
+```
+
+### Reading the result
+
+**Bias** is the average error (0 is ideal). **RMSE** is the typical size of the error.
+
+The Aalen-Johansen estimate should sit on the true value. The 1 - Kaplan-Meier estimate is too high, and the gap grows as the death rate increases.
